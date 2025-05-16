@@ -5,7 +5,7 @@ namespace Tests\Unit;
 use App\Http\Controllers\PhoneNumberValidationController;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 class PhoneNumberValidationTest extends TestCase
 {

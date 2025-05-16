@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\PhoneNumber;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use libphonenumber\PhoneNumberFormat;
+use libphonenumber\PhoneNumberType;
 use libphonenumber\PhoneNumberUtil;
+use libphonenumber\NumberParseException;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class PhoneNumberValidationController extends Controller
 {
@@ -15,7 +18,7 @@ class PhoneNumberValidationController extends Controller
         // Validate the request data
         $validator = Validator::make($request->all(), [
             'quantity' => 'required|integer|min:1',
-            'country_code' => 'required|string|min:1|max:3',
+            'country_code' => 'required|string|size:2', // Expecting ISO 3166-1 alpha-2 like 'US'
         ]);
 
         if ($validator->fails()) {
@@ -23,19 +26,28 @@ class PhoneNumberValidationController extends Controller
         }
 
         $quantity = $request->input('quantity');
-        $countryCode = $request->input('country_code');
+        $countryCode = strtoupper($request->input('country_code'));
         $results = [];
         $validCount = 0;
 
         $phoneUtil = PhoneNumberUtil::getInstance();
 
         for ($i = 0; $i < $quantity; $i++) {
-            // Generate a random phone number (basic example -  use a library or more robust method in real application)
-            $nationalNumber = rand(100000000, 999999999); // Example: 9-digit number
+            // Generate a random 9-digit number
+            $exampleNumber = $phoneUtil->getExampleNumberForType($countryCode, PhoneNumberType::MOBILE);
+            if ($exampleNumber) {
+                $baseNationalNumber = $exampleNumber->getNationalNumber();
+                $baseString = substr((string) $baseNationalNumber, 0, -3);
+                $randomSuffix = str_pad(rand(0, 999), 3, '0', STR_PAD_LEFT);
+                $nationalNumber = (int) ($baseString . $randomSuffix);
+            } else {
+                // fallback
+                $nationalNumber = rand(100000000, 999999999);
+            }
+
             try {
-                $phoneNumber =$phoneUtil->parse($nationalNumber, $countryCode);
-            } catch (\libphonenumber\NumberParseException $e) {
-                // Handle phone number parsing errors
+                $phoneNumber = $phoneUtil->parse($nationalNumber, $countryCode);
+            } catch (NumberParseException $e) {
                 $results[] = [
                     'phone_number' => $nationalNumber,
                     'country_code' => $countryCode,
@@ -43,60 +55,41 @@ class PhoneNumberValidationController extends Controller
                     'is_possible_number_length_match' => false,
                     'is_valid' => false,
                 ];
-                continue; // Skip to the next iteration
+                continue;
             }
 
             $isValid = $phoneUtil->isValidNumber($phoneNumber);
             $type = $phoneUtil->getNumberType($phoneNumber);
             $isPossibleLengthMatch = $phoneUtil->isPossibleNumber($phoneNumber);
+            $phoneNumberString = $phoneUtil->format($phoneNumber, PhoneNumberFormat::E164);
 
-            $phoneNumberString = $phoneUtil->format($phoneNumber, PhoneNumberFormat::E164); // Get E.164 format
+            $typeString = match ($type) {
+                PhoneNumberType::FIXED_LINE => 'FIXED_LINE',
+                PhoneNumberType::MOBILE => 'MOBILE',
+                PhoneNumberType::FIXED_LINE_OR_MOBILE => 'FIXED_LINE_OR_MOBILE',
+                PhoneNumberType::TOLL_FREE => 'TOLL_FREE',
+                PhoneNumberType::PREMIUM_RATE => 'PREMIUM_RATE',
+                PhoneNumberType::SHARED_COST => 'SHARED_COST',
+                PhoneNumberType::VOIP => 'VOIP',
+                PhoneNumberType::PERSONAL_NUMBER => 'PERSONAL_NUMBER',
+                PhoneNumberType::PAGER => 'PAGER',
+                PhoneNumberType::UAN => 'UAN',
+                PhoneNumberType::VOICEMAIL => 'VOICEMAIL',
+                default => 'UNKNOWN',
+            };
 
-             // Map the phone number type to a string
-            $typeString = 'UNKNOWN';
-            switch ($type) {
-                case \libphonenumber\PhoneNumberType::FIXED_LINE:
-                    $typeString = 'FIXED_LINE';
-                    break;
-                case \libphonenumber\PhoneNumberType::MOBILE:
-                    $typeString = 'MOBILE';
-                    break;
-                case \libphonenumber\PhoneNumberType::FIXED_LINE_OR_MOBILE:
-                    $typeString = 'FIXED_LINE_OR_MOBILE';
-                    break;
-                case \libphonenumber\PhoneNumberType::TOLL_FREE:
-                    $typeString = 'TOLL_FREE';
-                    break;
-                case \libphonenumber\PhoneNumberType::PREMIUM_RATE:
-                    $typeString = 'PREMIUM_RATE';
-                    break;
-                case \libphonenumber\PhoneNumberType::SHARED_COST:
-                    $typeString = 'SHARED_COST';
-                    break;
-                case \libphonenumber\PhoneNumberType::VOIP:
-                    $typeString = 'VOIP';
-                    break;
-                case \libphonenumber\PhoneNumberType::PERSONAL_NUMBER:
-                    $typeString = 'PERSONAL_NUMBER';
-                    break;
-                case \libphonenumber\PhoneNumberType::PAGER:
-                    $typeString = 'PAGER';
-                    break;
-                case \libphonenumber\PhoneNumberType::UAN:
-                    $typeString = 'UAN';
-                    break;
-                case \libphonenumber\PhoneNumberType::VOICEMAIL:
-                    $typeString = 'VOICEMAIL';
-                    break;
+            try {
+                DB::connection('mongodb')->table('phone_numbers')->insert([
+                    'phone_number' => $phoneNumberString,
+                    'country_code' => $countryCode,
+                    'type' => $typeString,
+                    'is_possible_number_length_match' => $isPossibleLengthMatch,
+                    'is_valid' => $isValid,
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Database error: ' . $e->getMessage());
+                return response()->json(['error' => 'Failed to save to database: ' . $e->getMessage()], 500); // Return a 500 error
             }
-            // Store the phone number and validation results in MongoDB
-            $phoneNumberModel = new PhoneNumber();
-            $phoneNumberModel->phone_number = $phoneNumberString;
-            $phoneNumberModel->country_code = $countryCode;
-            $phoneNumberModel->type = $typeString;
-            $phoneNumberModel->is_possible_number_length_match = $isPossibleLengthMatch;
-            $phoneNumberModel->is_valid = $isValid;
-            $phoneNumberModel->save();
 
             $results[] = [
                 'phone_number' => $phoneNumberString,
