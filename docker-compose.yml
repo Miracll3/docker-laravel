@@ -1,0 +1,64 @@
+# version: '3.8'
+
+services:
+  # Frontend Laravel Application
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: laravel_frontend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+      - backend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/var/www/html
+      - ./frontend/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    networks:
+      - app-network
+
+  # Backend Laravel Application (Microservice)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: laravel_backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "9000:80"
+    volumes:
+      - ./backend:/var/www/html
+      - ./backend/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    networks:
+      - app-network
+
+  # MongoDB Service
+  mongo:
+    image: mongo:latest
+    container_name: mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./mongo/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - app-network
+
+# Networks
+networks:
+  app-network:
+    driver: bridge
+
+# Volumes
+volumes:
+  mongo_data:
+    driver: local
